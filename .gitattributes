@@ -1,0 +1,2 @@
+wwwroot/bootstrap/** linguist-vendored
+*.razor linguist-language=C#
