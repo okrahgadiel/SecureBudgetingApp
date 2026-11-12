@@ -1,0 +1,129 @@
+﻿@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using SecureBudgetingApp.Models
+@inject AuthenticationStateProvider AuthStateProvider
+@inject SecureBudgetingDBContext db
+@inject NavigationManager Navigation
+@inject IHttpContextAccessor HttpContextAccessor
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <!-- App name -->
+        <a class="navbar-brand" href="">Secure Budgeting</a>
+    </div>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="flex-column">
+
+        <!-- Always visible -->
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill"></span> Home
+            </NavLink>
+        </div>
+
+        @if (!isAuthenticated)
+        {
+            <!-- Show when NOT logged in -->
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="register">
+                    <span class="bi bi-person-plus"></span> Register
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="login">
+                    <span class="bi bi-box-arrow-in-right"></span> Login
+                </NavLink>
+            </div>
+        }
+
+        @if (isAuthenticated)
+        {
+            <!-- Divider -->
+            <hr style="color:white;" />
+
+            <!-- Main app features -->
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="dashboard">
+                    <span class="bi bi-speedometer2"></span> Dashboard
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="budget">
+                    <span class="bi bi-wallet2"></span> Budget
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="add-transaction">
+                    <span class="bi bi-plus-circle"></span> Add Transaction
+                </NavLink>
+            </div>
+
+            <!-- Alerts with badge -->
+            <div class="nav-item px-3">
+                <NavLink class="nav-link d-flex justify-content-between align-items-center" href="alerts">
+                    <span>
+                        <span class="bi bi-bell"></span> Alerts
+                    </span>
+
+                    @if (alertCount > 0)
+                    {
+                        <span class="badge bg-danger">@alertCount</span>
+                    }
+                </NavLink>
+            </div>
+
+            <!-- Divider -->
+            <hr style="color:white;" />
+
+            <!-- About -->
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="about">
+                    <span class="bi bi-info-circle"></span> About
+                </NavLink>
+            </div>
+
+            <!-- Logout -->
+            <form method="post" action="/logout" class="nav-item px-3">
+                <button type="submit"
+                        class="nav-link btn btn-link text-start w-100"
+                        style="color:white">
+                    <span class="bi bi-box-arrow-right"></span> Logout
+                </button>
+            </form>
+        }
+
+    </nav>
+</div>
+
+@code {
+    int alertCount = 0;
+    bool isAuthenticated = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        isAuthenticated = user.Identity != null && user.Identity.IsAuthenticated;
+
+        if (isAuthenticated)
+        {
+            var userId = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (!string.IsNullOrEmpty(userId))
+            {
+                var userGuid = Guid.Parse(userId);
+
+                alertCount = db.Alerts
+                    .Count(a => a.UserId == userGuid && a.IsRead == false);
+            }
+        }
+    }
+}

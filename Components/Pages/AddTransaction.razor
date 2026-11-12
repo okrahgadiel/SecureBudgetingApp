@@ -1,0 +1,171 @@
+﻿@page "/add-transaction"
+@rendermode InteractiveServer
+
+@using SecureBudgetingApp.Models
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject SecureBudgetingDBContext db
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthStateProvider
+
+<h3>Add Transaction</h3>
+
+<div style="max-width:400px">
+
+    <label>Description</label>
+    <input class="form-control" @bind="description" />
+
+    <label>Amount</label>
+    <input type="number" step="0.01" class="form-control" @bind="amount" />
+
+    <label>Transaction Type</label>
+    <select class="form-control"
+            @bind="transactionType"
+            @bind:after="FilterCategories">
+
+        <option value="Expense">Expense</option>
+        <option value="Income">Income</option>
+
+    </select>
+
+    <label>Category</label>
+    <select class="form-control" @bind="categoryId">
+        @foreach (var c in categories)
+        {
+            <option value="@c.CategoryId">@c.CategoryName</option>
+        }
+    </select>
+
+    <br />
+
+    <button class="btn btn-primary" @onclick="SaveTransaction">
+        Save Transaction
+    </button>
+
+    <p style="color:red">@message</p>
+
+</div>
+
+@code {
+
+    string description = "";
+    decimal amount = 0;
+    string transactionType = "Expense";
+    int categoryId;
+
+    string message = "";
+
+    List<Category> categories = new();
+
+    Guid userGuid;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity != null && user.Identity.IsAuthenticated)
+        {
+            var id = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (!string.IsNullOrEmpty(id))
+            {
+                userGuid = Guid.Parse(id);
+            }
+        }
+
+        categories = db.Categories
+            .Where(c => c.CategoryType.ToLower() == transactionType.ToLower())
+            .ToList();
+
+        if (categories.Any())
+        {
+            categoryId = categories.First().CategoryId;
+        }
+    }
+
+    void FilterCategories()
+    {
+        categories = db.Categories
+            .Where(c => c.CategoryType.ToLower() == transactionType.ToLower())
+            .ToList();
+
+        if (categories.Any())
+        {
+            categoryId = categories.First().CategoryId;
+        }
+
+        StateHasChanged();
+    }
+
+    async Task SaveTransaction()
+    {
+        try
+        {
+            if (userGuid == Guid.Empty)
+            {
+                message = "User not authenticated.";
+                return;
+            }
+
+            if (amount <= 0 || string.IsNullOrWhiteSpace(description) || categoryId == 0)
+            {
+                message = "Please fill all fields correctly.";
+                return;
+            }
+
+            var t = new Transaction
+            {
+                UserId = userGuid,
+                CategoryId = categoryId,
+                Description = description,
+                Amount = amount,
+                TransactionType = transactionType,
+                TransactionDate = DateOnly.FromDateTime(DateTime.Now)
+            };
+
+            db.Transactions.Add(t);
+            await db.SaveChangesAsync();
+
+            // ALERT LOGIC WITH CATEGORY NAME
+            if (transactionType == "Expense")
+            {
+                var month = DateTime.Now.Month;
+                var year = DateTime.Now.Year;
+
+                var budget = db.Budgets.FirstOrDefault(b =>
+                    b.UserId == userGuid &&
+                    b.CategoryId == categoryId &&
+                    b.BudgetMonth == month &&
+                    b.BudgetYear == year);
+
+                if (budget != null)
+                {
+                    var totalSpent = db.Transactions
+                        .Where(t => t.UserId == userGuid &&
+                                    t.CategoryId == categoryId &&
+                                    t.TransactionType == "Expense" &&
+                                    t.TransactionDate.Month == month)
+                        .Sum(t => (decimal?)t.Amount) ?? 0;
+
+                    // get category name
+                    var categoryName = db.Categories
+                        .Where(c => c.CategoryId == categoryId)
+                        .Select(c => c.CategoryName)
+                        .FirstOrDefault();
+
+                    
+
+                    await db.SaveChangesAsync();
+                }
+            }
+
+            Navigation.NavigateTo("/dashboard", true);
+        }
+        catch (Exception ex)
+        {
+            message = ex.Message;
+        }
+    }
+}

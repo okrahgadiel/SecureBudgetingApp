@@ -1,0 +1,104 @@
+﻿@page "/register"
+@rendermode InteractiveServer
+
+@using SecureBudgetingApp.Models
+@using Microsoft.AspNetCore.Identity
+
+@inject SecureBudgetingDBContext db
+@inject NavigationManager Navigation
+
+<h3>Create Account</h3>
+
+<div style="max-width:400px">
+
+    <label>First Name</label>
+    <input class="form-control" @bind="firstName" />
+
+    <label>Last Name</label>
+    <input class="form-control" @bind="lastName" />
+
+    <label>Email</label>
+    <input class="form-control" @bind="email" />
+
+    <label>Password</label>
+    <input type="password" class="form-control" @bind="password" />
+
+    <br />
+
+    <button type="button" class="btn btn-success" @onclick="RegisterUser">
+        Register
+    </button>
+
+    <p style="color:red">@message</p>
+
+</div>
+
+@code {
+
+    string firstName = "";
+    string lastName = "";
+    string email = "";
+    string password = "";
+    string message = "";
+
+    async Task RegisterUser()
+    {
+        try
+        {
+            message = "Processing...";
+
+            // Validate inputs
+            if (string.IsNullOrWhiteSpace(email) ||
+                string.IsNullOrWhiteSpace(password) ||
+                string.IsNullOrWhiteSpace(firstName) ||
+                string.IsNullOrWhiteSpace(lastName))
+            {
+                message = "All fields are required.";
+                return;
+            }
+
+            // Check if user already exists
+            var existingUser = db.Users.FirstOrDefault(u => u.Email == email);
+
+            if (existingUser != null)
+            {
+                message = "User already exists.";
+                return;
+            }
+
+            // Create user object
+            var user = new User
+            {
+                UserId = Guid.NewGuid(),
+                FirstName = firstName,
+                LastName = lastName,
+                Email = email,
+                CreatedAt = DateTime.Now,
+                IsActive = true,
+                FailedLoginAttempts = 0
+            };
+
+            // Hash password
+            var hasher = new PasswordHasher<User>();
+            user.PasswordHash = hasher.HashPassword(user, password);
+
+            // Save to database
+            db.Users.Add(user);
+            await db.SaveChangesAsync();
+
+            message = "Account created successfully.";
+
+            // force UI to update so message shows
+            StateHasChanged();
+
+            // wait 2 seconds so user can see message
+            await Task.Delay(2000);
+
+            Navigation.NavigateTo("/login");
+        }
+        catch (Exception ex)
+        {
+            message = "Error: " + ex.Message;
+        }
+    }
+}

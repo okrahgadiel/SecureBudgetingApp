@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+# Visual Studio
+.vs/
+*.user
+*.suo
+# Deployment profiles (contain Azure subscription details)
+Properties/PublishProfiles/
+Properties/ServiceDependencies/
+# Local secrets
+appsettings.*.local.json
+secrets.json
+.env
+.DS_Store

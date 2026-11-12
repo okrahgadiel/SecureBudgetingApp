@@ -1,0 +1,396 @@
+﻿@page "/dashboard"
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.Data.SqlClient
+@using Microsoft.EntityFrameworkCore
+@using SecureBudgetingApp.Models
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+@inject SecureBudgetingDBContext db
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthStateProvider
+
+<h3>
+    @GetGreeting(), @firstName 👋
+</h3>
+
+<p style="color:gray;">
+    Welcome to SecureBudgeting. Here is your financial overview.
+</p>
+
+<!-- Onboarding for new users -->
+@if (!hasBudgets && !hasTransactions)
+{
+    <div style="background:#f8f9fa; padding:25px; border-radius:12px; text-align:center; margin-bottom:20px;">
+        <h4>Get Started</h4>
+        <p style="color:gray;">You haven’t set up a budget or added any transactions yet.</p>
+
+        <a href="/budget" class="btn btn-primary me-2">Create Budget</a>
+        <a href="/add-transaction" class="btn btn-success">Add Transaction</a>
+    </div>
+}
+
+@if (alerts.Count > 0)
+{
+    <!-- Alerts -->
+    <div style="margin-bottom:20px">
+        @foreach (var alert in alerts)
+        {
+            <div style="background:#fff3cd; border-left:6px solid #ff9800; padding:12px; margin-bottom:10px; border-radius:8px;">
+                ⚠ @alert.AlertMessage
+            </div>
+        }
+    </div>
+}
+
+<!-- Summary cards -->
+<div style="display:flex; gap:20px; margin-bottom:20px; flex-wrap:wrap;">
+    <div style="flex:1; padding:20px; background:#e3f2fd; border-radius:10px;">
+        <h5>Total Income</h5>
+        <h3>@(Convert.ToDecimal(dashboard?.TotalIncome ?? 0).ToString("C"))</h3>
+    </div>
+
+    <div style="flex:1; padding:20px; background:#ffebee; border-radius:10px;">
+        <h5>Total Expenses</h5>
+        <h3>@(Convert.ToDecimal(dashboard?.TotalExpenses ?? 0).ToString("C"))</h3>
+    </div>
+
+    <div style="flex:1; padding:20px; background:#e8f5e9; border-radius:10px;">
+        <h5>Balance</h5>
+        <h3>@((Convert.ToDecimal(dashboard?.TotalIncome ?? 0) - Convert.ToDecimal(dashboard?.TotalExpenses ?? 0)).ToString("C"))</h3>
+    </div>
+</div>
+
+<h4>Budget Progress</h4>
+
+@foreach (var item in budgetProgress)
+{
+    var percent = item.Limit == 0 ? 0 : (item.Spent / item.Limit) * 100;
+
+    <div style="margin-bottom:15px;">
+        <strong>@item.Category</strong>
+
+        <div style="background:#ddd; height:20px; border-radius:10px;">
+            <div style="
+                    width:@percent%;
+                    background:@(percent > 100 ? "red" : percent > 80 ? "orange" : "green");
+                    height:100%;
+                    border-radius:10px;">
+            </div>
+        </div>
+
+        <small>@item.Spent.ToString("C") / @item.Limit.ToString("C")</small>
+    </div>
+}
+
+<hr />
+
+<!--CHART SECTION -->
+<h4>Spending Breakdown</h4>
+
+<div style="width:400px; margin:auto;">
+    <canvas id="spendingChart"></canvas>
+</div>
+
+<hr />
+
+<h4>Recent Transactions</h4>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Date</th>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Amount</th>
+            <th>Type</th>
+            <th>Action</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        @foreach (var t in recentTransactions)
+        {
+            <tr>
+                <td>@t.TransactionDate.ToShortDateString()</td>
+                <td>@t.Category?.CategoryName</td>
+                <td>@t.Description</td>
+                <td>@t.Amount.ToString("C")</td>
+                <td>@t.TransactionType</td>
+                <td>
+                    <button class="btn btn-warning btn-sm" @onclick="() => StartEdit(t)">Edit</button>
+                    <button class="btn btn-danger btn-sm" @onclick="() => DeleteTransaction(t.TransactionId)">Delete</button>
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@if (editingTransaction != null)
+{
+    <h4>Edit Transaction</h4>
+
+    <input class="form-control" @bind="editingTransaction.Description" />
+    <input type="number" class="form-control" @bind="editingTransaction.Amount" />
+
+    <button class="btn btn-success" @onclick="SaveEdit">Save</button>
+    <button class="btn btn-secondary" @onclick="CancelEdit">Cancel</button>
+}
+
+@code {
+
+    string firstName = "";
+    Guid userGuid;
+
+    bool hasBudgets = false;
+    bool hasTransactions = false;
+
+    List<Alert> alerts = new();
+    List<Transaction> recentTransactions = new();
+
+    VwMonthlyFinancialSummary? dashboard;
+    List<dynamic> budgetProgress = new();
+
+    // chart data
+    List<string> categoryLabels = new();
+    List<double> categoryValues = new();
+
+    Transaction? editingTransaction;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        var id = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+        if (!string.IsNullOrEmpty(id))
+        {
+            userGuid = Guid.Parse(id);
+        }
+
+        firstName = db.Users.FirstOrDefault(u => u.UserId == userGuid)?.FirstName ?? "";
+
+        // dashboard summary
+        dashboard = db.VwMonthlyFinancialSummaries
+            .FromSqlRaw("EXEC GetMonthlyBudgetDashboard @UserID, @Month, @Year",
+                new SqlParameter("@UserID", userGuid),
+                new SqlParameter("@Month", DateTime.Now.Month),
+                new SqlParameter("@Year", DateTime.Now.Year))
+            .AsEnumerable()
+            .FirstOrDefault();
+
+        // alerts
+        alerts = db.Alerts
+            .Where(a => a.UserId == userGuid && a.IsRead == false)
+            .ToList();
+
+        // transactions
+        recentTransactions = db.Transactions
+            .Where(t => t.UserId == userGuid)
+            .Include(t => t.Category)
+            .OrderByDescending(t => t.TransactionDate)
+            .Take(5)
+            .ToList();
+
+        // budget progress
+        budgetProgress = db.Budgets
+            .Where(b => b.UserId == userGuid &&
+                        b.BudgetMonth == DateTime.Now.Month &&
+                        b.BudgetYear == DateTime.Now.Year)
+            .Select(b => new
+            {
+                Category = b.Category.CategoryName,
+                Limit = b.MonthlyLimit,
+                Spent = db.Transactions
+                    .Where(t => t.UserId == userGuid &&
+                                t.CategoryId == b.CategoryId &&
+                                t.TransactionType == "Expense" &&
+                                t.TransactionDate.Month == DateTime.Now.Month)
+                    .Sum(t => (decimal?)t.Amount) ?? 0
+            })
+            .ToList<dynamic>();
+
+        // chart data
+        var categoryData = db.Transactions
+            .Where(t => t.UserId == userGuid && t.TransactionType == "Expense")
+            .GroupBy(t => t.Category.CategoryName)
+            .Select(g => new
+            {
+                Category = g.Key,
+                Total = g.Sum(x => x.Amount)
+            })
+            .ToList();
+
+        categoryLabels = categoryData.Select(x => x.Category).ToList();
+        categoryValues = categoryData.Select(x => (double)x.Total).ToList();
+
+        // user state
+        hasBudgets = db.Budgets.Any(b => b.UserId == userGuid);
+        hasTransactions = db.Transactions.Any(t => t.UserId == userGuid);
+    }
+
+    // render chart after UI loads
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && categoryLabels.Count > 0)
+        {
+            await JS.InvokeVoidAsync(
+                "renderCategoryChart",
+                categoryLabels.ToArray(),
+                categoryValues.ToArray()
+            );
+        }
+    }
+
+    async Task DeleteTransaction(int transactionId)
+    {
+        var transaction = db.Transactions
+            .FirstOrDefault(t => t.TransactionId == transactionId && t.UserId == userGuid);
+
+        if (transaction != null)
+        {
+            int categoryId = transaction.CategoryId;
+
+            db.Transactions.Remove(transaction);
+            await db.SaveChangesAsync();
+
+            // 
+            await UpdateAlerts(userGuid, categoryId);
+
+            await OnInitializedAsync();
+        }
+    }
+
+    async Task UpdateAlerts(Guid userGuid, int categoryId)
+    {
+        var month = DateTime.Now.Month;
+        var year = DateTime.Now.Year;
+
+        var budget = db.Budgets.FirstOrDefault(b =>
+            b.UserId == userGuid &&
+            b.CategoryId == categoryId &&
+            b.BudgetMonth == month &&
+            b.BudgetYear == year);
+
+        if (budget == null) return;
+
+        var totalSpent = db.Transactions
+            .Where(t => t.UserId == userGuid &&
+                        t.CategoryId == categoryId &&
+                        t.TransactionType == "Expense" &&
+                        t.TransactionDate.Month == month)
+            .Sum(t => (decimal?)t.Amount) ?? 0;
+
+        var categoryName = db.Categories
+            .Where(c => c.CategoryId == categoryId)
+            .Select(c => c.CategoryName)
+            .FirstOrDefault();
+
+        var existingWarning = db.Alerts.FirstOrDefault(a =>
+            a.UserId == userGuid &&
+            a.CategoryId == categoryId &&
+            a.AlertType == "Warning");
+
+        var existingExceeded = db.Alerts.FirstOrDefault(a =>
+            a.UserId == userGuid &&
+            a.CategoryId == categoryId &&
+            a.AlertType == "Exceeded");
+
+        // REMOVE alerts when below threshold
+        if (totalSpent < budget.MonthlyLimit * 0.8m && existingWarning != null)
+            db.Alerts.Remove(existingWarning);
+
+        if (totalSpent <= budget.MonthlyLimit && existingExceeded != null)
+            db.Alerts.Remove(existingExceeded);
+
+        // ADD alerts if needed
+        if (totalSpent >= budget.MonthlyLimit * 0.8m && existingWarning == null)
+        {
+            db.Alerts.Add(new Alert
+            {
+                UserId = userGuid,
+                CategoryId = categoryId,
+                AlertMessage = $"Warning: 80% of {categoryName} budget reached",
+                AlertType = "Warning",
+                CreatedAt = DateTime.Now,
+                IsRead = false
+            });
+        }
+
+        if (totalSpent > budget.MonthlyLimit && existingExceeded == null)
+        {
+            db.Alerts.Add(new Alert
+            {
+                UserId = userGuid,
+                CategoryId = categoryId,
+                AlertMessage = $"Budget exceeded for {categoryName}",
+                AlertType = "Exceeded",
+                CreatedAt = DateTime.Now,
+                IsRead = false
+            });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    void StartEdit(Transaction transaction)
+    {
+        editingTransaction = new Transaction
+        {
+            TransactionId = transaction.TransactionId,
+            Description = transaction.Description,
+            Amount = transaction.Amount,
+            TransactionType = transaction.TransactionType,
+            CategoryId = transaction.CategoryId,
+            TransactionDate = transaction.TransactionDate,
+            UserId = transaction.UserId
+        };
+    }
+
+    async Task SaveEdit()
+    {
+        if (editingTransaction == null) return;
+
+        var original = db.Transactions
+            .FirstOrDefault(t => t.TransactionId == editingTransaction.TransactionId);
+
+        if (original != null)
+        {
+            int categoryId = original.CategoryId;
+
+            original.Description = editingTransaction.Description;
+            original.Amount = editingTransaction.Amount;
+
+            await db.SaveChangesAsync();
+
+            // Updates alerts once transactions have been edited or deleted
+            await UpdateAlerts(userGuid, categoryId);
+        }
+
+        editingTransaction = null;
+
+        await OnInitializedAsync();
+    }
+
+    void CancelEdit()
+    {
+        editingTransaction = null;
+    }
+
+    // greeting logic
+    string GetGreeting()
+    {
+        var centralZone = TimeZoneInfo.FindSystemTimeZoneById("Central Standard Time");
+        var localTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, centralZone);
+
+        var hour = localTime.Hour;
+
+        if (hour < 12) return "Good morning";
+        if (hour < 18) return "Good afternoon";
+        return "Good evening";
+    }
+}

@@ -1,0 +1,132 @@
+﻿@page "/alerts"
+@rendermode InteractiveServer
+
+@using SecureBudgetingApp.Models
+@using System.Security.Claims
+
+@inject SecureBudgetingDBContext db
+@using Microsoft.AspNetCore.Components.Authorization
+@inject AuthenticationStateProvider AuthStateProvider
+
+<h3>Budget Alerts</h3>
+
+@if (!string.IsNullOrEmpty(message))
+{
+    // show success message after marking alert as read
+    <div style="
+            background:#d4edda;
+            padding:10px;
+            border-radius:6px;
+            margin-bottom:10px;
+            color:#155724;
+        ">
+        @message
+    </div>
+}
+
+@if (alerts == null)
+{
+    // loading state
+    <p>Loading alerts...</p>
+}
+else if (!alerts.Any())
+{
+    // no alerts available
+    <p>No alerts at the moment.</p>
+}
+else
+{
+    // display alerts as cards
+    @foreach (var alert in alerts)
+    {
+        <div style="
+                    background:#fff3cd;
+                    border-left:6px solid #ff9800;
+                    padding:12px;
+                    margin-bottom:10px;
+                    border-radius:8px;
+                ">
+
+            <!-- alert date -->
+            <div style="font-size:14px; color:#555;">
+                @alert.CreatedAt?.ToString("g")
+            </div>
+
+            <!-- alert type -->
+            <div style="font-weight:bold;">
+                @alert.AlertType
+            </div>
+
+            <!-- alert message -->
+            <div>
+                @alert.AlertMessage
+            </div>
+
+            <br />
+
+            <!-- mark alert as read -->
+            <button class="btn btn-sm btn-success"
+                    @onclick="() => MarkAsRead(alert)">
+                Mark as Read
+            </button>
+        </div>
+    }
+}
+
+@code {
+
+    // list of alerts
+    List<Alert> alerts = new();
+
+    // success message
+    string message = "";
+
+    // logged-in user id
+    Guid userGuid;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // get logged-in user correctly (works in Azure)
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity != null && user.Identity.IsAuthenticated)
+        {
+            var id = user.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+
+            if (!string.IsNullOrEmpty(id))
+            {
+                userGuid = Guid.Parse(id);
+            }
+        }
+
+       
+
+        LoadAlerts();
+    }
+
+    void LoadAlerts()
+    {
+        // load only unread alerts for this user
+        alerts = db.Alerts
+            .Where(a => a.UserId == userGuid && a.IsRead == false)
+            .OrderByDescending(a => a.CreatedAt)
+            .ToList();
+    }
+
+    async Task MarkAsRead(Alert alert)
+    {
+        // mark alert as read
+        alert.IsRead = true;
+
+        await db.SaveChangesAsync();
+
+        // show success message
+        message = "Alert marked as read.";
+
+        // remove alert from UI immediately
+        alerts.Remove(alert);
+
+        StateHasChanged();
+    }
+}

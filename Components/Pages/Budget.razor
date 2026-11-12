@@ -1,0 +1,164 @@
+﻿@page "/budget"
+@rendermode InteractiveServer
+
+@using SecureBudgetingApp.Models
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+@attribute [Authorize]
+
+@inject SecureBudgetingDBContext db
+@inject AuthenticationStateProvider AuthStateProvider
+
+<h3>Set Monthly Budget</h3>
+
+<div style="max-width:400px">
+
+    <label>Category</label>
+    <select class="form-control" @bind="categoryId">
+        @foreach (var c in categories)
+        {
+            <option value="@c.CategoryId">@c.CategoryName</option>
+        }
+    </select>
+
+    <label>Monthly Limit</label>
+    <input type="number" step="0.01" class="form-control" @bind="amount" />
+
+    <br />
+
+    <button type="button" class="btn btn-success" @onclick="SaveBudget">
+        Save Budget
+    </button>
+
+    <p style="color:green">@message</p>
+
+</div>
+
+<hr />
+
+<h4>Your Budgets</h4>
+
+@if (budgets.Count == 0)
+{
+    <p>No budgets set yet.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Category</th>
+                <th>Limit</th>
+                <th>Month</th>
+                <th>Year</th>
+            </tr>
+        </thead>
+
+        <tbody>
+            @foreach (var b in budgets)
+            {
+                <tr>
+                    <td>@b.Category?.CategoryName</td>
+                    <td>@b.MonthlyLimit.ToString("C")</td>
+                    <td>@b.BudgetMonth</td>
+                    <td>@b.BudgetYear</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+
+    decimal amount;
+    int categoryId;
+
+    string message = "";
+
+    Guid userGuid;
+
+    List<Category> categories = new();
+    List<SecureBudgetingApp.Models.Budget> budgets = new();
+
+    //  Use AuthenticationStateProvider (works in Azure)
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+
+        if (user.Identity != null && user.Identity.IsAuthenticated)
+        {
+            var id = user.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (!string.IsNullOrEmpty(id))
+                userGuid = Guid.Parse(id);
+        }
+
+        categories = db.Categories
+            .Where(c => c.CategoryType == "Expense")
+            .ToList();
+
+        LoadBudgets();
+    }
+
+    void LoadBudgets()
+    {
+        budgets = db.Budgets
+            .Where(b => b.UserId == userGuid)
+            .OrderByDescending(b => b.BudgetYear)
+            .ThenByDescending(b => b.BudgetMonth)
+            .ToList();
+    }
+
+    async Task SaveBudget()
+    {
+        // prevents Azure crash
+        if (userGuid == Guid.Empty)
+        {
+            message = "User not authenticated.";
+            return;
+        }
+
+        if (amount <= 0)
+        {
+            message = "Enter a valid amount.";
+            return;
+        }
+
+        var currentMonth = DateTime.Now.Month;
+        var currentYear = DateTime.Now.Year;
+
+        var existing = db.Budgets.FirstOrDefault(b =>
+            b.UserId == userGuid &&
+            b.CategoryId == categoryId &&
+            b.BudgetMonth == currentMonth &&
+            b.BudgetYear == currentYear);
+
+        if (existing != null)
+        {
+            existing.MonthlyLimit = amount;
+        }
+        else
+        {
+            db.Budgets.Add(new SecureBudgetingApp.Models.Budget
+            {
+                UserId = userGuid,
+                CategoryId = categoryId,
+                MonthlyLimit = amount,
+                BudgetMonth = currentMonth,
+                BudgetYear = currentYear,
+                CreatedAt = DateTime.Now
+            });
+        }
+
+        await db.SaveChangesAsync();
+
+        message = "Budget saved successfully.";
+
+        amount = 0; // reset field
+
+        LoadBudgets();
+    }
+}

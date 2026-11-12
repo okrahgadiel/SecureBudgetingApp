@@ -1,0 +1,48 @@
+﻿@page "/login"
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Components
+
+<h3>Login</h3>
+
+@if (!string.IsNullOrEmpty(errorMessage))
+{
+    <p style="color:red">@errorMessage</p>
+}
+
+<form method="post" action="/login-handler">
+
+    <div style="max-width:400px">
+
+        <label>Email</label>
+        <input name="email" class="form-control" />
+
+        <label>Password</label>
+        <input name="password" type="password" class="form-control" />
+
+        <br />
+
+        <button type="submit" class="btn btn-primary">
+            Login
+        </button>
+
+    </div>
+
+</form>
+
+@code {
+
+    [Parameter]
+    [SupplyParameterFromQuery]
+    public string? error { get; set; }
+
+    string errorMessage = "";
+
+    protected override void OnInitialized()
+    {
+        if (!string.IsNullOrEmpty(error))
+        {
+            errorMessage = error;
+        }
+    }
+}
